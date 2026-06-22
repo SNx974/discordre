@@ -1,0 +1,251 @@
+// Prisma schema — MATCHMAKING
+// Stack: PostgreSQL 16
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x", "windows"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================================
+//  IDENTITÉ & SOCIAL
+// =====================================================================
+
+model User {
+  id        String   @id @default(cuid())
+  discordId String   @unique
+  username  String
+  email     String?  @unique
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships   TeamMembership[]
+  matchPlayers  MatchPlayer[]
+  validations   MatchValidation[]
+  submissions   MatchResult[]      @relation("SubmittedBy")
+  adminActions  AdminAction[]      @relation("AdminUser")
+
+  @@index([discordId])
+}
+
+model Team {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  tag       String   @unique
+  logoUrl   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members    TeamMembership[]
+  matchesAsA Match[]          @relation("TeamA")
+  matchesAsB Match[]          @relation("TeamB")
+
+  @@index([tag])
+}
+
+model TeamMembership {
+  id       String   @id @default(cuid())
+  userId   String
+  teamId   String
+  role     TeamRole @default(PLAYER)
+  joinedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, teamId])
+  @@index([teamId])
+}
+
+enum TeamRole {
+  CAPTAIN
+  PLAYER
+  COACH
+  SUB
+}
+
+// =====================================================================
+//  MATCHS
+// =====================================================================
+
+model Match {
+  id          String      @id @default(cuid())
+  game        GameType
+  status      MatchStatus @default(PENDING)
+  format      MatchFormat @default(BO1)
+
+  teamAId String
+  teamBId String
+  teamA   Team   @relation("TeamA", fields: [teamAId], references: [id])
+  teamB   Team   @relation("TeamB", fields: [teamBId], references: [id])
+
+  scheduledAt   DateTime?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  cancelledAt   DateTime?
+
+  // Discord
+  discordChannelId String?         @unique
+  channel          DiscordChannel?
+
+  players     MatchPlayer[]
+  results     MatchResult[]
+  validations MatchValidation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, scheduledAt])
+  @@index([teamAId])
+  @@index([teamBId])
+}
+
+enum GameType {
+  CS2
+  VALORANT
+  LOL
+  DOTA2
+  ROCKET_LEAGUE
+  CUSTOM
+}
+
+enum MatchStatus {
+  PENDING             // créé, pas lancé
+  AWAITING_PLAYERS    // channel créé, joueurs invités
+  IN_PROGRESS         // au moins un joueur a signé
+  RESULT_PENDING      // screenshot uploadé, OCR en cours
+  AWAITING_VALIDATION // OCR fini, en attente de validation
+  DISPUTED            // désaccord → admin
+  COMPLETED
+  CANCELLED
+}
+
+enum MatchFormat {
+  BO1
+  BO3
+  BO5
+}
+
+model MatchPlayer {
+  id       String   @id @default(cuid())
+  matchId  String
+  userId   String
+  teamSide TeamSide
+  joinedAt DateTime @default(now())
+
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@unique([matchId, userId])
+  @@index([userId])
+}
+
+enum TeamSide {
+  A
+  B
+}
+
+// =====================================================================
+//  DISCORD
+// =====================================================================
+
+model DiscordChannel {
+  id               String   @id @default(cuid())
+  discordChannelId String   @unique
+  guildId          String
+  matchId          String   @unique
+  match            Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime  @default(now())
+  archivedAt DateTime?
+}
+
+// =====================================================================
+//  RÉSULTATS & OCR
+// =====================================================================
+
+model MatchResult {
+  id         String       @id @default(cuid())
+  matchId    String
+  gameNumber Int          @default(1)
+  scoreA     Int
+  scoreB     Int
+  winnerSide TeamSide?
+
+  screenshotUrl String
+  rawOcrJson    Json?
+  ocrConfidence Float?
+  ocrProvider   String?
+
+  submittedById String?
+  source        ResultSource
+  status        ResultStatus @default(PROCESSING)
+
+  submittedBy User?             @relation("SubmittedBy", fields: [submittedById], references: [id])
+  match       Match             @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  validations MatchValidation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([matchId, gameNumber])
+  @@index([status])
+}
+
+enum ResultSource {
+  DISCORD
+  WEB
+}
+
+enum ResultStatus {
+  PROCESSING
+  READY
+  VALIDATED
+  REJECTED
+}
+
+model MatchValidation {
+  id          String             @id @default(cuid())
+  matchId     String
+  resultId    String
+  validatorId String
+  teamSide    TeamSide
+  decision    ValidationDecision
+  comment     String?
+  validatedAt DateTime           @default(now())
+
+  match     Match       @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  result    MatchResult @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  validator User        @relation(fields: [validatorId], references: [id])
+
+  @@unique([resultId, teamSide])
+  @@index([matchId])
+}
+
+enum ValidationDecision {
+  APPROVE
+  DISPUTE
+}
+
+// =====================================================================
+//  AUDIT
+// =====================================================================
+
+model AdminAction {
+  id        String   @id @default(cuid())
+  adminId   String
+  action    String   // "force_validate" | "cancel_match" | "re_run_ocr"
+  targetId  String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  admin User @relation("AdminUser", fields: [adminId], references: [id])
+
+  @@index([action])
+  @@index([targetId])
+}

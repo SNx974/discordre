@@ -1,0 +1,55 @@
+# ===================================================================
+#  API — NestJS
+#  Multi-stage : deps → build → runtime léger
+# ===================================================================
+
+# ---------- Base ----------
+FROM node:22-alpine AS base
+RUN apk add --no-cache openssl curl
+WORKDIR /repo
+ENV CI=true \
+    NPM_CONFIG_LOGLEVEL=warn
+
+# ---------- Dependencies ----------
+FROM base AS deps
+COPY package.json package-lock.json* ./
+COPY packages/shared/package.json ./packages/shared/
+COPY apps/api/package.json ./apps/api/
+COPY apps/bot/package.json ./apps/bot/
+COPY apps/web/package.json ./apps/web/
+COPY prisma ./prisma
+RUN npm ci
+
+# ---------- Build ----------
+FROM deps AS build
+COPY tsconfig.base.json* ./
+COPY packages/shared/ ./packages/shared/
+COPY apps/api/ ./apps/api/
+
+RUN npx prisma generate --schema=prisma/schema.prisma
+RUN npm run build --workspace=@matchmaking/shared
+RUN npm run build --workspace=@matchmaking/api
+
+# ---------- Runtime ----------
+FROM node:22-alpine AS runtime
+RUN apk add --no-cache openssl curl
+WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=4000
+
+# Code compilé + Prisma client
+COPY --from=build /repo/prisma ./prisma
+COPY --from=build /repo/node_modules/.prisma ./node_modules/.prisma
+COPY --from=build /repo/node_modules/@prisma ./node_modules/@prisma
+COPY --from=build /repo/packages/shared/dist ./packages/shared/dist
+COPY --from=build /repo/packages/shared/package.json ./packages/shared/
+COPY --from=build /repo/apps/api/dist ./dist
+COPY --from=build /repo/package.json ./package.json
+COPY --from=deps /repo/node_modules ./node_modules
+
+EXPOSE 4000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -fsS http://localhost:4000/health || exit 1
+
+CMD ["node", "dist/main.js"]

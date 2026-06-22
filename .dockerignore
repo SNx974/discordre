@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Dependencies (réinstallées dans le Dockerfile)
+node_modules
+**/node_modules
+
+# Build outputs
+.next
+dist
+build
+.turbo
+coverage
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE / OS
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Local envs
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Docs (pas utiles dans l'image)
+docs
+README.md
+DEPLOY.md
+
+# Tests
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+__tests__
+test

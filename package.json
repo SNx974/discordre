@@ -1,0 +1,46 @@
+{
+  "name": "matchmaking",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plateforme e-sport avec sync Discord temps réel",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:api dev:web dev:bot",
+    "dev:api": "npm --workspace @matchmaking/api run start:dev",
+    "dev:web": "npm --workspace @matchmaking/web run dev",
+    "dev:bot": "npm --workspace @matchmaking/bot run dev",
+    "build": "npm-run-all build:shared build:api build:web build:bot",
+    "build:shared": "npm --workspace @matchmaking/shared run build",
+    "build:api": "npm --workspace @matchmaking/api run build",
+    "build:web": "npm --workspace @matchmaking/web run build",
+    "build:bot": "npm --workspace @matchmaking/bot run build",
+    "lint": "npm-run-all --parallel lint:*",
+    "lint:api": "npm --workspace @matchmaking/api run lint",
+    "lint:web": "npm --workspace @matchmaking/web run lint",
+    "lint:bot": "npm --workspace @matchmaking/bot run lint",
+    "typecheck": "npm-run-all --parallel typecheck:*",
+    "typecheck:api": "npm --workspace @matchmaking/api run typecheck",
+    "typecheck:web": "npm --workspace @matchmaking/web run typecheck",
+    "typecheck:bot": "npm --workspace @matchmaking/bot run typecheck",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:logs": "docker compose -f infra/docker-compose.yml logs -f"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5",
+    "prisma": "^5.22.0",
+    "typescript": "^5.6.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
