@@ -67,4 +67,5 @@ RUN ls -la /app/node_modules/@matchmaking/ 2>/dev/null || \
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://localhost:4000/health || exit 1
-CMD ["node", "dist/main.js"]
+# DEBUG: keep container alive 1h after crash so we can read logs
+CMD ["sh", "-c", "node dist/main.js 2>&1 | tee /tmp/api.log; echo '--- CRASHED, sleeping 1h ---'; sleep 3600"]
