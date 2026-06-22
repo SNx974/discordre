@@ -18,6 +18,12 @@ COPY tsconfig.base.json* ./
 COPY packages/shared/ ./packages/shared/
 COPY apps/web/ ./apps/web/
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Next.js inlines NEXT_PUBLIC_* vars into the client bundle at build time,
+# so it must be passed as a build ARG, not just a runtime env var.
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 RUN npm run build --workspace=@matchmaking/shared
 RUN npm run build --workspace=@matchmaking/web
 
