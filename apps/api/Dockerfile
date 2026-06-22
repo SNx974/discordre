@@ -1,6 +1,7 @@
 # ===================================================================
-#  API — NestJS
-#  Multi-stage : deps → build → runtime léger
+#  API — NestJS (contexte = apps/api/)
+#  Ce Dockerfile fonctionne quand le contexte de build est apps/api/
+#  Seul apps/api/ est copié, plus le schema Prisma et le shared package
 # ===================================================================
 
 # ---------- Base ----------
@@ -12,19 +13,28 @@ ENV CI=true \
 
 # ---------- Dependencies ----------
 FROM base AS deps
-COPY package.json package-lock.json* ./
-COPY packages/shared/package.json ./packages/shared/
-COPY apps/api/package.json ./apps/api/
-COPY apps/bot/package.json ./apps/bot/
-COPY apps/web/package.json ./apps/web/
-COPY prisma ./prisma
-RUN npm ci
+# Schéma Prisma (à la racine du repo : ../../prisma)
+COPY ../../prisma ./prisma
+# Packages shared (à la racine du repo : ../../packages/shared)
+COPY ../../packages/shared/package.json ../../packages/shared/tsconfig.json ./packages/shared/
+# Ce service
+COPY package.json ./
+
+# Installer toutes les deps (du repo entier via workspaces)
+WORKDIR /repo
+COPY ../../package.json ../../package-lock.json* ./
+COPY ../../packages/shared/package.json ./packages/shared/
+COPY ../../apps/api/package.json ./apps/api/
+COPY ../../apps/bot/package.json ./apps/bot/
+COPY ../../apps/web/package.json ./apps/web/
+RUN npm ci --workspaces=false || npm install
 
 # ---------- Build ----------
 FROM deps AS build
-COPY tsconfig.base.json* ./
-COPY packages/shared/ ./packages/shared/
-COPY apps/api/ ./apps/api/
+WORKDIR /repo
+COPY ../../tsconfig.base.json* ./
+COPY ../../packages/shared/ ./packages/shared/
+COPY . ./apps/api/
 
 RUN npx prisma generate --schema=prisma/schema.prisma
 RUN npm run build --workspace=@matchmaking/shared
@@ -37,7 +47,6 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=4000
 
-# Code compilé + Prisma client
 COPY --from=build /repo/prisma ./prisma
 COPY --from=build /repo/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /repo/node_modules/@prisma ./node_modules/@prisma
