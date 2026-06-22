@@ -1,75 +1,53 @@
 # ===================================================================
-#  API Service — NestJS (DEBUG VERSION)
-#  Verbeux pour identifier les erreurs de build
+#  API Service — NestJS (REBUILT FROM SCRATCH)
+#  Approche minimale pour éliminer les variables
 # ===================================================================
 
-FROM node:22-alpine AS base
-RUN apk add --no-cache openssl curl
-WORKDIR /repo
-ENV CI=true NPM_CONFIG_LOGLEVEL=warn
-
-FROM base AS deps
-COPY package.json package-lock.json* ./
-COPY packages/shared/package.json ./packages/shared/
-COPY apps/api/package.json ./apps/api/
-COPY apps/bot/package.json ./apps/bot/
-COPY apps/web/package.json ./apps/web/
-COPY prisma ./prisma
-RUN npm ci
-
-FROM deps AS build
-COPY tsconfig.base.json* ./
-COPY packages/shared/ ./packages/shared/
-COPY apps/api/ ./apps/api/
-
-# Prisma generate
-RUN npx prisma generate --schema=prisma/schema.prisma 2>&1 | tail -20
-
-# Build shared
-RUN echo "=== Building shared ===" && \
-    npm run build --workspace=@matchmaking/shared 2>&1 | tail -30
-
-# Build API
-RUN echo "=== Building API ===" && \
-    npm run build --workspace=@matchmaking/api 2>&1 | tail -30
-
-# Debug : vérifier que dist existe
-RUN echo "=== Listing apps/api/dist ===" && \
-    ls -la apps/api/dist/ 2>&1 || echo "NO dist DIRECTORY"
-
-FROM node:22-alpine AS runtime
-RUN apk add --no-cache openssl curl
+FROM node:22-alpine
+RUN apk add --no-cache openssl curl tini
 WORKDIR /app
-ENV NODE_ENV=production PORT=4000
 
-COPY --from=build /repo/prisma ./prisma
-COPY --from=build /repo/node_modules/.prisma ./node_modules/.prisma
-COPY --from=build /repo/node_modules/@prisma ./node_modules/@prisma
-COPY --from=build /repo/packages/shared/dist ./packages/shared/dist
-COPY --from=build /repo/packages/shared/package.json ./packages/shared/
-COPY --from=build /repo/apps/api/dist ./dist
-COPY --from=build /repo/apps/api/package.json ./apps/api/package.json
-COPY --from=build /repo/package.json ./package.json
+ENV NODE_ENV=production \
+    PORT=4000 \
+    NPM_CONFIG_LOGLEVEL=warn
 
-# Install prod deps in runtime stage
-WORKDIR /repo
-COPY package.json package-lock.json* ./
-COPY packages/shared/package.json ./packages/shared/
-COPY apps/api/package.json ./apps/api/
-COPY prisma ./prisma
-RUN npm install --omit=dev --workspaces=false
-RUN npm install --omit=dev --workspace=@matchmaking/api --include-workspace-root=false
+# On copie TOUT le repo d'un coup
+COPY . /app/
 
-WORKDIR /app
-COPY --from=build --chown=root:root /repo/node_modules /app/node_modules
+# Install toutes les deps (dev inclues, on en a besoin pour le build)
+RUN npm install --workspaces=false --include-workspace-root=false
+RUN npm install --include-workspace-root
 
-# Verify
-RUN echo "=== Final check: ===" && \
-    ls -la /app/dist/ 2>&1 || echo "NO dist IN RUNTIME" && \
-    ls -la /app/node_modules/@matchmaking/ 2>&1
+# Build Prisma + shared + API
+RUN cd /app && npx prisma generate --schema=prisma/schema.prisma
+RUN cd /app && npm run build --workspace=@matchmaking/shared
+RUN cd /app && npm run build --workspace=@matchmaking/api
+
+# Vérification que le build a produit quelque chose
+RUN echo "=== CHECK 1: apps/api/dist contents ===" && \
+    find /app/apps/api/dist -type f 2>&1 | head -20 && \
+    echo "=== CHECK 2: file existence ===" && \
+    test -f /app/apps/api/dist/main.js && echo "main.js EXISTS" || echo "main.js MISSING" && \
+    echo "=== CHECK 3: shared/dist ===" && \
+    ls -la /app/packages/shared/dist/
+
+# Reinstall prod-only pour avoir un node_modules propre
+RUN cd /app && rm -rf node_modules apps/*/node_modules packages/*/node_modules && \
+    npm install --omit=dev --workspaces=false --include-workspace-root=false && \
+    npm install --omit=dev --workspace=@matchmaking/api --include-workspace-root=false
+
+# Setup final
+RUN mkdir -p /app/dist && \
+    cp -r /app/apps/api/dist/* /app/dist/ && \
+    ls -la /app/dist/ && \
+    test -f /app/dist/main.js && echo "FINAL: main.js OK" || echo "FINAL: main.js MISSING"
+
+# Clean up
+RUN rm -rf /app/apps /app/packages /app/prisma /app/node_modules/.cache
 
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://localhost:4000/health || exit 1
-# DEBUG: keep alive after crash
+
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["sh", "-c", "node dist/main.js 2>&1 | tee /tmp/api.log; echo '--- CRASHED ---'; sleep 3600"]
