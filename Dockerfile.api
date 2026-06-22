@@ -1,13 +1,14 @@
 # ===================================================================
-#  API Service — NestJS
-#  Contexte de build = racine du repo
+#  API Service — NestJS (DEBUG VERSION)
+#  Verbeux pour identifier les erreurs de build
 # ===================================================================
 
-# ---------- Stage 1 : install ALL deps (pour le build) ----------
-FROM node:22-alpine AS deps
+FROM node:22-alpine AS base
 RUN apk add --no-cache openssl curl
 WORKDIR /repo
 ENV CI=true NPM_CONFIG_LOGLEVEL=warn
+
+FROM base AS deps
 COPY package.json package-lock.json* ./
 COPY packages/shared/package.json ./packages/shared/
 COPY apps/api/package.json ./apps/api/
@@ -16,56 +17,59 @@ COPY apps/web/package.json ./apps/web/
 COPY prisma ./prisma
 RUN npm ci
 
-# ---------- Stage 2 : build TS ----------
 FROM deps AS build
 COPY tsconfig.base.json* ./
 COPY packages/shared/ ./packages/shared/
 COPY apps/api/ ./apps/api/
-RUN npx prisma generate --schema=prisma/schema.prisma
-RUN npm run build --workspace=@matchmaking/shared
-RUN npm run build --workspace=@matchmaking/api
 
-# ---------- Stage 3 : prod deps only (runtime) ----------
-FROM node:22-alpine AS prod-deps
-RUN apk add --no-cache openssl
-WORKDIR /repo
-COPY package.json package-lock.json* ./
-COPY packages/shared/package.json ./packages/shared/
-COPY apps/api/package.json ./apps/api/
-COPY prisma ./prisma
-# Installer UNIQUEMENT les deps de prod (les workspaces résolvent transitivement)
-RUN npm install --omit=dev --workspaces=false
-RUN npm install --omit=dev --workspace=@matchmaking/api --include-workspace-root=false
+# Prisma generate
+RUN npx prisma generate --schema=prisma/schema.prisma 2>&1 | tail -20
 
-# ---------- Stage 4 : runtime final ----------
+# Build shared
+RUN echo "=== Building shared ===" && \
+    npm run build --workspace=@matchmaking/shared 2>&1 | tail -30
+
+# Build API
+RUN echo "=== Building API ===" && \
+    npm run build --workspace=@matchmaking/api 2>&1 | tail -30
+
+# Debug : vérifier que dist existe
+RUN echo "=== Listing apps/api/dist ===" && \
+    ls -la apps/api/dist/ 2>&1 || echo "NO dist DIRECTORY"
+
 FROM node:22-alpine AS runtime
 RUN apk add --no-cache openssl curl
 WORKDIR /app
 ENV NODE_ENV=production PORT=4000
 
-# Prisma schema + generated client (besoin au runtime pour les migrations)
 COPY --from=build /repo/prisma ./prisma
 COPY --from=build /repo/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /repo/node_modules/@prisma ./node_modules/@prisma
-
-# Code compilé de l'API
-COPY --from=build /repo/apps/api/dist ./dist
-COPY --from=build /repo/apps/api/package.json ./apps/api/package.json
-
-# @matchmaking/shared compilé
 COPY --from=build /repo/packages/shared/dist ./packages/shared/dist
 COPY --from=build /repo/packages/shared/package.json ./packages/shared/
+COPY --from=build /repo/apps/api/dist ./dist
+COPY --from=build /repo/apps/api/package.json ./apps/api/package.json
+COPY --from=build /repo/package.json ./package.json
 
-# Deps de prod installées (contiennent @matchmaking/shared via workspaces)
-COPY --from=prod-deps /repo/node_modules ./node_modules
+# Install prod deps in runtime stage
+WORKDIR /repo
+COPY package.json package-lock.json* ./
+COPY packages/shared/package.json ./packages/shared/
+COPY apps/api/package.json ./apps/api/
+COPY prisma ./prisma
+RUN npm install --omit=dev --workspaces=false
+RUN npm install --omit=dev --workspace=@matchmaking/api --include-workspace-root=false
 
-# S'assurer que le lien symbolique est bon
-RUN ls -la /app/node_modules/@matchmaking/ 2>/dev/null || \
-    (mkdir -p /app/node_modules/@matchmaking && \
-     ln -sf /app/packages/shared /app/node_modules/@matchmaking/shared)
+WORKDIR /app
+COPY --from=build --chown=root:root /repo/node_modules /app/node_modules
+
+# Verify
+RUN echo "=== Final check: ===" && \
+    ls -la /app/dist/ 2>&1 || echo "NO dist IN RUNTIME" && \
+    ls -la /app/node_modules/@matchmaking/ 2>&1
 
 EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -fsS http://localhost:4000/health || exit 1
-# DEBUG: keep container alive 1h after crash so we can read logs
-CMD ["sh", "-c", "node dist/main.js 2>&1 | tee /tmp/api.log; echo '--- CRASHED, sleeping 1h ---'; sleep 3600"]
+# DEBUG: keep alive after crash
+CMD ["sh", "-c", "node dist/main.js 2>&1 | tee /tmp/api.log; echo '--- CRASHED ---'; sleep 3600"]
