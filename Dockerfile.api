@@ -15,13 +15,16 @@ ENV NODE_ENV=production \
 COPY . /app/
 
 # Install toutes les deps (dev inclues, on en a besoin pour le build)
-RUN npm install --workspaces=false --include-workspace-root=false
 RUN npm install --include-workspace-root
+
+# Install TypeScript globally so it's available for all workspaces
+# (npm workspaces can be flaky about hoisting dev deps from root)
+RUN npm install -g typescript@5.5.4
 
 # Build Prisma + shared + API
 RUN cd /app && npx prisma generate --schema=prisma/schema.prisma
-RUN cd /app && npm run build --workspace=@matchmaking/shared
-RUN cd /app && npm run build --workspace=@matchmaking/api
+RUN cd /app/packages/shared && npx tsc -p tsconfig.json
+RUN cd /app/apps/api && npx nest build
 
 # Vérification que le build a produit quelque chose
 RUN echo "=== CHECK 1: apps/api/dist contents ===" && \
@@ -33,8 +36,7 @@ RUN echo "=== CHECK 1: apps/api/dist contents ===" && \
 
 # Reinstall prod-only pour avoir un node_modules propre
 RUN cd /app && rm -rf node_modules apps/*/node_modules packages/*/node_modules && \
-    npm install --omit=dev --workspaces=false --include-workspace-root=false && \
-    npm install --omit=dev --workspace=@matchmaking/api --include-workspace-root=false
+    npm install --omit=dev --include-workspace-root
 
 # Setup final
 RUN mkdir -p /app/dist && \
