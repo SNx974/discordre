@@ -1,43 +1,11 @@
 # ===================================================================
-#  MATCHMAKING — Production stack (Dockploy / Docker Compose v2)
-# ===================================================================
-#  Tous les services sont sur un réseau privé `matchmaking-net`.
-#  Les secrets viennent des variables d'environnement (à configurer
-#  dans l'UI Dockploy ou via un fichier .env séparé).
+#  MATCHMAKING — Production stack (Dockploy)
+#  Postgres + Redis sont des services Dockploy externes (cf. .env)
+#  Ce compose ne gère QUE : MinIO + API + Web + Bot
 # ===================================================================
 
 services:
-  # ─── Infrastructure ──────────────────────────────────────────────
-
-  postgres:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-matchmaking}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-matchmaking}
-      POSTGRES_DB: ${POSTGRES_DB:-matchmaking}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-matchmaking}"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-    networks: [matchmaking-net]
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 15s
-      timeout: 3s
-      retries: 10
-    networks: [matchmaking-net]
-
+  # ─── Storage (local) ───────────────────────────────────────────
   minio:
     image: minio/minio:latest
     restart: unless-stopped
@@ -54,21 +22,18 @@ services:
       retries: 5
     networks: [matchmaking-net]
 
-  # ─── Apps ────────────────────────────────────────────────────────
-
+  # ─── API ──────────────────────────────────────────────────────
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
       minio: { condition: service_healthy }
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-matchmaking}:${POSTGRES_PASSWORD:-matchmaking}@postgres:5432/${POSTGRES_DB:-matchmaking}?schema=public
-      REDIS_URL: redis://redis:6379
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
       API_PORT: 4000
       NEXTAUTH_URL: ${NEXTAUTH_URL}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
@@ -78,7 +43,7 @@ services:
       S3_BUCKET: ${S3_BUCKET:-matchmaking-screenshots}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
-      S3_PUBLIC_URL: ${S3_PUBLIC_URL:-http://minio:9000/matchmaking-screenshots}
+      S3_PUBLIC_URL: ${S3_PUBLIC_URL:-http://localhost:9000/matchmaking-screenshots}
       OCR_PROVIDER: ${OCR_PROVIDER:-gpt4o}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       GOOGLE_CLOUD_VISION_KEY: ${GOOGLE_CLOUD_VISION_KEY:-}
@@ -86,6 +51,7 @@ services:
       - "${API_PORT:-4000}:4000"
     networks: [matchmaking-net]
 
+  # ─── Web ──────────────────────────────────────────────────────
   web:
     build:
       context: .
@@ -96,7 +62,7 @@ services:
     environment:
       NODE_ENV: production
       API_URL: http://api:4000
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://discordre.152-228-128-146.sslip.io}
       NEXTAUTH_URL: ${NEXTAUTH_URL}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
       DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
@@ -105,6 +71,7 @@ services:
       - "${WEB_PORT:-3000}:3000"
     networks: [matchmaking-net]
 
+  # ─── Bot ──────────────────────────────────────────────────────
   bot:
     build:
       context: .
@@ -112,7 +79,6 @@ services:
     restart: unless-stopped
     depends_on:
       api: { condition: service_started }
-      redis: { condition: service_healthy }
     environment:
       NODE_ENV: production
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
@@ -122,7 +88,7 @@ services:
       DISCORD_MATCH_CATEGORY_ID: ${DISCORD_MATCH_CATEGORY_ID:-}
       API_URL: http://api:4000
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: ${REDIS_URL}
       BOT_LOG_LEVEL: ${BOT_LOG_LEVEL:-info}
     networks: [matchmaking-net]
 
@@ -131,6 +97,4 @@ networks:
     driver: bridge
 
 volumes:
-  postgres_data:
-  redis_data:
   minio_data:
